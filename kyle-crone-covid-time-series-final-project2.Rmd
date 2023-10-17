@@ -1,0 +1,328 @@
+---
+title: "Time Series Analysis of COVID-19 Data"
+author: "Kyle Crone"
+date: "10-16-23"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+library(scales)
+```
+
+## Import Datasets
+
+The data for this project on Covid19 deaths, cases, and recoveries for US and Global populations comes from Johns Hopkins via this link: <https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series>.
+
+The goal of this project is to analyze and visualize Covid 19 data from a National (US) and International (Global) perspective. Some key points to be emphasized will be the relationship between the cases and deaths as well as the leading countries for number of deaths and the leading US States for number of deaths. The dataset may not be perfect, so keeping Bias in mind is important. Bias will be further explored at the end of the project.
+
+
+```{r datasets, echo=TRUE}
+global_confirmed <- read.csv('global_confirmed.csv', stringsAsFactors = FALSE)
+global_deaths <- read.csv('global_deaths.csv', stringsAsFactors = FALSE)
+global_recovered <- read.csv('global_recovered.csv', stringsAsFactors = FALSE)
+us_confirmed <- read.csv('us_confirmed.csv', stringsAsFactors = FALSE)
+us_deaths <- read.csv('us_deaths.csv', stringsAsFactors = FALSE)
+
+names(global_confirmed) <- gsub("^X", "", names(global_confirmed))
+names(global_confirmed) <- gsub("\\.", "-", names(global_confirmed))
+
+names(global_deaths) <- gsub("^X", "", names(global_deaths))
+names(global_deaths) <- gsub("\\.", "-", names(global_deaths))
+
+names(global_recovered) <- gsub("^X", "", names(global_recovered))
+names(global_recovered) <- gsub("\\.", "-", names(global_recovered))
+
+names(us_confirmed) <- gsub("^X", "", names(us_confirmed))
+names(us_confirmed) <- gsub("\\.", "-", names(us_confirmed))
+
+names(us_deaths) <- gsub("^X", "", names(us_deaths))
+names(us_deaths) <- gsub("\\.", "-", names(us_deaths))
+
+length(colnames(global_confirmed))
+length(colnames(global_deaths))
+length(colnames(global_recovered))
+length(colnames(us_confirmed))
+length(colnames(us_deaths))
+
+# as we can see, there are A LOT of columns in these datasets which makes sense since they are time-series
+```
+```{r}
+colnames(global_confirmed)
+
+
+head(global_confirmed$`Province-State`)
+```
+
+
+
+```{r tidy-transform, echo=TRUE}
+global_confirmed_long <- global_confirmed %>%
+  gather(date, confirmed, -`Province-State`, -`Country-Region`, -Lat, -Long) %>%
+  mutate(date = mdy(date)) %>%
+  filter(!is.na(confirmed)) # remove NA values from the dates
+
+global_deaths_long <- global_deaths %>%
+  gather(date, deaths, -`Province-State`, -`Country-Region`, -Lat, -Long) %>%
+  mutate(date = mdy(date)) %>%
+  filter(!is.na(deaths))
+
+global_recovered_long <- global_recovered %>%
+  gather(date, recovered, -`Province-State`, -`Country-Region`, -Lat, -Long) %>%
+  mutate(date = mdy(date)) %>%
+  filter(!is.na(recovered))
+
+us_confirmed_long <- us_confirmed %>%
+  gather(date, confirmed, -UID, -iso2, -iso3, -code3, -FIPS, -Admin2, -Province_State, -Country_Region, -Lat, -Long_) %>%
+  mutate(date = mdy(date)) %>%
+  filter(!is.na(confirmed))
+
+us_deaths_long <- us_deaths %>%
+  gather(date, deaths, -UID, -iso2, -iso3, -code3, -FIPS, -Admin2, -Province_State, -Country_Region, -Lat, -Long_) %>%
+  mutate(date = mdy(date)) %>%
+  filter(!is.na(deaths))
+
+```
+### Troubleshooting Problem Dates
+
+``` {r troubleshooting dates, echo=TRUE}
+# Check dates from us_confirmed that fail to parse
+
+problematic_dates_confirmed <- us_confirmed_long %>%
+  mutate(parsed_date = mdy(date)) %>%
+  filter(is.na(parsed_date)) %>%
+  select(date) %>%
+  distinct()
+
+problematic_dates_deaths <- us_deaths_long %>%
+  mutate(parsed_date = mdy(date)) %>%
+  filter(is.na(parsed_date)) %>%
+  select(date) %>%
+  distinct()
+
+
+
+
+```
+
+
+### Fixing the problem dates by adding a step which will try multiple date formats
+Knitting the document proved to be rather difficult as it was having trouble reading the dates correctly. The process for getting it to work took many iterations and various techniques
+``` {r datefix, echo=TRUE}
+us_confirmed_long <- us_confirmed %>%
+  gather(date, confirmed, -UID, -iso2, -iso3, -code3, -FIPS, -Admin2, -Province_State, -Country_Region, -Lat, -Long_) %>%
+  mutate(parsed_date = ifelse(is.na(ymd(date)), mdy(date), ymd(date))) %>%
+  filter(!is.na(confirmed) & !is.na(parsed_date))
+
+us_deaths_long <- us_deaths %>%
+  gather(date, deaths, -UID, -iso2, -iso3, -code3, -FIPS, -Admin2, -Province_State, -Country_Region, -Lat, -Long_) %>%
+  mutate(parsed_date = ifelse(is.na(ymd(date)), mdy(date), ymd(date))) %>%
+  filter(!is.na(deaths) & !is.na(parsed_date))
+
+
+```
+
+
+## Merge & Analyze Data
+Creating a new dataframe which merges confirmed cases and reported deaths in the United States will help to visualize the data
+``` {r merge, echo=TRUE}
+#first we will merge the US data
+us_data <- left_join(us_confirmed_long, us_deaths_long, by = c("UID", "date", "iso2", "iso3", "code3", "FIPS", "Admin2", "Province_State", "Country_Region", "Lat", "Long_"))
+
+#merging may bring in some weird duplicate date columns so we just need to remove those
+
+
+```
+
+
+## Visualizing slices of the datasets
+
+### Confirmed Cases vs Deaths (US)
+
+``` {r us visualize, echo=TRUE}
+
+str(us_data) # reveals some columns like date and confirmed are in an incorrect data format
+
+# Convert confirmed and deaths to numeric
+us_data$confirmed <- as.numeric(us_data$confirmed)
+us_data$deaths <- as.numeric(us_data$deaths)
+
+# Parse date column to Date type
+us_data$date <- mdy(us_data$date)
+
+
+# after some testing, visualizing both confirmed cases and deaths on one axis proved difficult to read, as a result we need to use multiple Y-Axis
+
+
+us_data_grouped <- us_data %>%
+  group_by(date) %>%
+  summarise(total_confirmed = sum(confirmed, na.rm=TRUE), total_deaths = sum(deaths, na.rm=TRUE))
+
+ggplot(us_data_grouped) +
+  geom_line(aes(x=date, y=total_confirmed, color="Confirmed")) +
+  geom_line(aes(x=date, y=total_deaths * 1000, color="Deaths")) + # Multiply deaths by 1000 to align with primary axis scaling in thousands
+  labs(title = "US Confirmed Cases vs Deaths Over Time", x = "Date", y = "Confirmed Cases (in Thousands)") +
+  scale_color_manual(values = c("Confirmed"="blue", "Deaths"="red")) +
+  scale_y_continuous(name = "Confirmed Cases", labels = scales::comma_format(scale = 1e-3), 
+                     sec.axis = sec_axis(~ . / 1000, name = "Deaths (in Hundreds)", labels = scales::comma_format(scale = 1e-2))) + # Adjust secondary axis scaling and labeling
+  theme_minimal()
+
+```
+
+### Top 5 US States by Number of Covid Related Deaths
+``` {r top states, echo=TRUE}
+# Group by state and summarize the total deaths
+top_states <- us_data %>%
+  group_by(Province_State) %>%
+  summarise(total_deaths = sum(deaths, na.rm=TRUE)) %>%
+  arrange(-total_deaths) %>%
+  head(5)
+
+# Plot the data
+ggplot(top_states, aes(x=reorder(Province_State, total_deaths), y=total_deaths, fill=total_deaths)) +
+  geom_bar(stat="identity") +
+  labs(title = "Top 5 US States with Most Deaths", 
+       x = "", 
+       y = "Total Deaths") +
+  scale_fill_gradient(low="lightyellow", high="red", name="Total Deaths", labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +  coord_flip() +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size=16, hjust=0.5),
+    axis.title.y = element_text(size=14),
+    axis.text.x = element_text(size=12)
+  )
+```
+
+
+
+### Confirmed Cases Over Time (Global)
+
+``` {r global cases, echo=TRUE}
+global_confirmed_long_grouped <- global_confirmed_long %>%
+  filter(!is.na(date) & !is.na(confirmed)) %>%
+  group_by(date) %>%
+  summarise(total_confirmed = sum(confirmed, na.rm=TRUE))
+
+ggplot(global_confirmed_long_grouped, aes(x=date, y=total_confirmed/1000)) +
+  geom_line(color = "blue") +
+  labs(title = "Global Confirmed Cases Over Time", 
+       x = "Date", 
+       y = "Total Confirmed Cases (in Thousands)") +
+  scale_y_continuous(labels = scales::comma_format(scale = 1)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size=16, hjust=0.5),
+    axis.title.x = element_text(size=14),
+    axis.title.y = element_text(size=14),
+    axis.text.x = element_text(angle=45, hjust=1)
+  )
+
+
+```
+
+
+### Deaths Over Time (Global)
+
+``` {r global deaths, echo=TRUE}
+global_deaths_long_grouped <- global_deaths_long %>%
+  filter(!is.na(date) & !is.na(deaths)) %>%
+  group_by(date) %>%
+  summarise(total_deaths = sum(deaths, na.rm=TRUE))
+
+ggplot(global_deaths_long_grouped, aes(x=date, y=total_deaths/1000)) +
+  geom_line(color = "red") +
+  labs(title = "Global Deaths Over Time", 
+       x = "Date", 
+       y = "Total Deaths (in Thousands)") +
+  scale_y_continuous(labels = scales::comma_format(scale = 1)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size=16, hjust=0.5),
+    axis.title.x = element_text(size=14),
+    axis.title.y = element_text(size=14),
+    axis.text.x = element_text(angle=45, hjust=1)
+  )
+
+
+
+```
+
+
+``` {r top5 global deaths, echo=TRUE}
+# Group by country and summarize the total deaths
+top_countries <- global_deaths_long %>%
+  group_by(`Country-Region`) %>%
+  summarise(total_deaths = sum(deaths, na.rm=TRUE)) %>%
+  arrange(desc(total_deaths)) %>%
+  head(5)
+
+# Plot the data
+ggplot(top_countries, aes(x=reorder(`Country-Region`, total_deaths), y=total_deaths/1000, fill=total_deaths/1000)) +
+  geom_bar(stat="identity") +
+  labs(title = "Top 5 Countries with Most Deaths", 
+       x = "", 
+       y = "Total Deaths (in Thousands)") +
+  scale_fill_gradient(low="pink", high="red", name="Total Deaths", labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size=16, hjust=0.5),
+    axis.title.y = element_text(size=14),
+    axis.text.x = element_text(size=12)
+  )
+
+
+
+```
+## Model
+
+In this model we can see each US State represented by a red dot fit nicely along the regression line, which is nothing groundbreaking considering more cases would result in more deaths, but it is interesting nonetheless.
+
+```{r modeling, echo=TRUE}
+
+
+# Group by state and summarize
+state_summary <- us_data %>%
+  group_by(`Province_State`) %>%
+  summarise(total_confirmed = sum(confirmed, na.rm = TRUE),
+            total_deaths = sum(deaths, na.rm = TRUE))
+
+# Select states to label based on certain criteria (e.g., top 10 states by deaths)
+top_states <- state_summary %>%
+  top_n(10, wt = total_deaths) %>%
+  pull(`Province_State`)
+
+# Scatter plot with regression line
+ggplot(state_summary, aes(x = total_confirmed, y = total_deaths)) +
+  geom_point(aes(color = "red"), size = 2) +
+  geom_smooth(method = "lm", color = "black", se = FALSE) +
+  geom_text(aes(label = if_else(`Province_State` %in% top_states, as.character(`Province_State`), NA_character_)), hjust = -0.1, vjust = 0.5, size = 3) +
+  labs(title = "Correlation between Confirmed Cases and Deaths by State",
+       x = "Total Confirmed Cases",
+       y = "Total Deaths") +
+  scale_x_continuous(labels = label_comma(scale = 0.001)) +
+  scale_y_continuous(labels = label_comma(scale = 0.001)) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+
+
+```
+
+## Bias & Conclusion
+
+In terms of bias with this dataset there are several things we need to consider. The reported cases and deaths cannot be assumed to be entirely accurate. Also, a death may be attributed to Covid-19 but there is no way of knowing if Covid-19 caused the death or only played the role of contributing factor or perhaps was even unrelated to the death but it is still being counted. For US only data, if the data is being reported by States and up to their own discretion with how they define a case, there could be issues with the reliability of their reporting.
+
+In conclusion, the data reflects what we witnessed live as the events unfolded. We saw a skyrocket in cases very quickly as shown in the various graphs and as the cases mounted up, so did the deaths. A further analysis could be conducted importing population statistics and analyzing the rate of death per population and also by age group. At a quick glance of the cases & deaths by US State one element that pops out is New Jersey being featured relatively high despite only being the 11th most populated state. It sits right next to Ohio, Illinois, and close to Pennsylvania despite having 2-3 million less people in the state. A deeper dive into the causes of these kinds of anomalies could prove to be useful.  
+
+
+
