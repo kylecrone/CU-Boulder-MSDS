@@ -1,0 +1,162 @@
+---
+title: "NYPD Project"
+author: "K.Crone"
+date: "2023-09-24"
+output: github_document
+
+---
+
+```{r, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(tinytex)
+library(readr)
+library(formatR)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## NYPD Shooting Incidents Dataset
+
+The dataset for this project comes from <https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic>
+
+The goal of this markdown project is to 1) Read in the dataset 2) Clean the data 3) Transform the data 4) Create Visualizations and Models to communicate the data
+
+### Read in the data from the csv file
+
+```{r reading file, tidy=TRUE}
+
+nypd_data <- read.csv("NYPD_Shooting_Incident_Data__Historic_.csv",stringsAsFactors = FALSE)
+
+summary(nypd_data) 
+#view summary of the dataset as is before any cleaning
+
+colnames(nypd_data) 
+#view column names to make it easier to see what is needed and what is not needed for this dataset
+```
+
+### Cleaning & Transforming the Data
+
+Several of the columns are not needed, so we will turn `nyp_data` into a dataframe, filter out the unwanted columns, clean up any missing/null/NA values, and change data types where needed
+
+```{r clean_transform i, tidy=TRUE}
+nypd_df <- data.frame(nypd_data)
+
+str(nypd_df) 
+# will show the data types of each column, 
+#and the next variable will house the columns we want to keep
+
+keep_cols <- c("OCCUR_DATE", "OCCUR_TIME", "BORO", "LOCATION_DESC","STATISTICAL_MURDER_FLAG","PERP_AGE_GROUP","PERP_SEX","PERP_RACE","VIC_AGE_GROUP", "VIC_SEX", "VIC_RACE")
+new_nypd_df <- nypd_df[keep_cols]
+```
+
+```{r clean_transform ii, tidy=TRUE}
+head(new_nypd_df)
+tail(new_nypd_df)
+colSums(is.na(new_nypd_df))
+# check count of na values for each column
+# LOCATION_DESC has by far the most na, and since that column is probably the least # valuable, we will remove it from out dataframe before cleaning out the rest of # the na's.
+new_nypd_df = subset(new_nypd_df, select = -c(LOCATION_DESC) ) # remove column
+
+new_nypd_df <- na.omit(new_nypd_df) # remove na values
+
+summary(new_nypd_df) # we still retain 17,968 rows which seems like enough to use in the analysis
+
+```
+
+We have the columns we want, the na values are removed but we still need to check the data for any wrong types or weird entries/errors within each column
+
+```{r clean_transform iii, tidy=TRUE}
+unique(new_nypd_df['PERP_SEX']) 
+# checking the PERP_SEX column reveals some null/unknown values still in the dataframe
+new_nypd_df[new_nypd_df == "(null)"] = NA
+new_nypd_df[new_nypd_df == "UNKNOWN"] = NA
+
+ages <- c('<18', '18-24', '25-44', '45-64', '65+')
+new_nypd_df <- new_nypd_df[new_nypd_df$PERP_AGE_GROUP %in% ages, ]
+new_nypd_df <- new_nypd_df[new_nypd_df$VIC_AGE_GROUP %in% ages, ]
+
+
+new_nypd_df <- na.omit(new_nypd_df)
+
+unique(new_nypd_df['PERP_AGE_GROUP'])
+unique(new_nypd_df$VIC_AGE_GROUP) 
+# i am used to python , but it seems in R using the $ symbol for column names is the best way to call by column name...
+```
+
+The OCCUR_TIME might serve us better as a day/night flag, for our purposes, 6:00-18:00 will be daytime, and the rest is nighttime
+
+```{r day_night}
+# i spent a long time and tried to figure out the best way to do this but could not get it to work...
+
+```
+
+### Visualization & Analysis
+
+```{r echo=FALSE, tidy=TRUE}
+ggplot(new_nypd_df, aes(x = PERP_RACE, fill = PERP_AGE_GROUP)) +
+  geom_bar(position = "stack") +
+  labs(title = "Age Group Distribution of Perpetrators by Race", x = "Race of Perpetrator", y = "Count") +
+  theme(
+    text = element_text(size=10),
+    plot.title = element_text(size=12, face='bold'),
+    axis.title = element_text(size=10, face='bold'),
+    axis.text = element_text(size = 9, angle = 45, hjust = 1),
+    legend.title = element_text(face='bold')
+    )
+
+
+```
+
+```{r echo=FALSE, tidy=TRUE}
+boro_summary <- new_nypd_df %>%
+  group_by(BORO) %>%
+  summarize(Count = n())
+ggplot(boro_summary, aes(x = "", y = Count, fill = BORO)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar(theta = "y") +  # This converts the bar chart to a pie chart
+  theme_void()
+```
+
+```{r, tidy=TRUE}
+# Let's format the date column so we can then get a visualization by year
+
+new_nypd_df$OCCUR_DATE <- as.Date(new_nypd_df$OCCUR_DATE, format = "%m/%d/%Y")
+new_nypd_df$Year <- year(new_nypd_df$OCCUR_DATE)
+
+```
+
+```{r echo=FALSE, tidy=TRUE}
+# plotting the by-year graph
+
+yearly_counts <- new_nypd_df %>%
+  group_by(Year) %>%
+  summarize(Count = n())
+
+ggplot(yearly_counts, aes(x = Year, y = Count)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Crimes per Year", x = "Year", y = "Number of Crimes") +
+  theme_minimal()
+```
+
+### Model the Data
+
+```{r}
+# make the variables into factors 
+new_nypd_df$STATISTICAL_MURDER_FLAG <- as.factor(new_nypd_df$STATISTICAL_MURDER_FLAG)
+new_nypd_df$PERP_AGE_GROUP <- as.factor(new_nypd_df$PERP_AGE_GROUP)
+new_nypd_df$PERP_RACE <- as.factor(new_nypd_df$PERP_RACE)
+```
+
+```{r}
+#regression analysis
+model <- glm(STATISTICAL_MURDER_FLAG ~ PERP_AGE_GROUP + PERP_RACE, 
+             data = new_nypd_df, family = "binomial")
+
+summary(model)
+# the model seems to be indicating that race is not a significant factor, while age group is.
+
+```
